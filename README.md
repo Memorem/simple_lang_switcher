@@ -36,7 +36,7 @@ Windows 11 language switching is **unreliable**. You press `Alt+Shift` 10-15 tim
 - **Windows toast notifications** on language change
 - **Settings persistence** — survives reboots
 - **Dark Material 3 UI** — modern, clean, book-format settings window
-- **Tiny footprint** — ~2 MB installer, minimal resource usage
+- **Tiny footprint** — ~3.5 MB installer, minimal resource usage
 - **Runs as admin** — ensures hotkeys work everywhere
 
 ### Tech Stack
@@ -47,11 +47,11 @@ Windows 11 language switching is **unreliable**. You press `Alt+Shift` 10-15 tim
 | Frontend | SolidJS + Solid UI (Kobalte) + Tailwind CSS |
 | Framework | Tauri v2 |
 | Build | Vite + Bun |
-| Installer | NSIS (perMachine, admin privileges) |
+| Installer | MSI (perMachine, admin privileges) |
 
 ### Installation
 
-1. Download `LangSwitch_x.x.x_x64-setup.exe` from [Releases](https://github.com/Memorem/simple_lang_switcher/releases)
+1. Download the latest `.msi` installer from [Releases](https://github.com/Memorem/simple_lang_switcher/releases)
 2. Run the installer (requires admin privileges)
 3. LangSwitch starts automatically and lives in the system tray
 
@@ -73,7 +73,7 @@ bun install
 bun run tauri build
 ```
 
-The installer will be at `src-tauri/target/release/bundle/nsis/LangSwitch_x.x.x_x64-setup.exe`
+The installer will be in `src-tauri/target/release/bundle/msi/`
 
 ### Tested On
 
@@ -101,12 +101,12 @@ The installer will be at `src-tauri/target/release/bundle/nsis/LangSwitch_x.x.x_
 - **Уведомления Windows** при смене языка
 - **Сохранение настроек** — переживают перезагрузки
 - **Тёмная тема Material 3** — современное окно настроек в книжном формате
-- **Минимальный размер** — ~2 МБ установщик, минимальное потребление ресурсов
+- **Минимальный размер** — ~3.5 МБ установщик, минимальное потребление ресурсов
 - **Запуск от администратора** — хоткеи работают везде
 
 ### Установка
 
-1. Скачайте `LangSwitch_x.x.x_x64-setup.exe` из [Releases](https://github.com/Memorem/simple_lang_switcher/releases)
+1. Скачайте последний `.msi` установщик из [Releases](https://github.com/Memorem/simple_lang_switcher/releases)
 2. Запустите установщик (требуются права администратора)
 3. LangSwitch запустится автоматически и будет жить в системном трее
 
@@ -128,7 +128,7 @@ bun install
 bun run tauri build
 ```
 
-Установщик будет в `src-tauri/target/release/bundle/nsis/LangSwitch_x.x.x_x64-setup.exe`
+Установщик будет в `src-tauri/target/release/bundle/msi/`
 
 ### Протестировано на
 
