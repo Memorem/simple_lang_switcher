@@ -1,4 +1,5 @@
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::time::Duration;
 use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     VK_CAPITAL, VK_CONTROL, VK_LCONTROL, VK_LMENU, VK_LSHIFT, VK_MENU, VK_RCONTROL, VK_RMENU,
@@ -20,6 +21,8 @@ static ALT_WAS_DOWN: AtomicBool = AtomicBool::new(false);
 static SHIFT_WAS_DOWN: AtomicBool = AtomicBool::new(false);
 static CTRL_WAS_DOWN: AtomicBool = AtomicBool::new(false);
 static COMBO_DIRTY: AtomicBool = AtomicBool::new(false);
+static SWITCH_DELAY_MS: AtomicU64 = AtomicU64::new(50);
+static PENDING_ID: AtomicU64 = AtomicU64::new(0);
 
 pub fn set_hotkey(hotkey: &str) {
     let parts: Vec<&str> = hotkey.split('+').map(|s| s.trim()).collect();
@@ -75,6 +78,12 @@ unsafe extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -
     }
 
     let kb = &*(lparam.0 as *const KBDLLHOOKSTRUCT);
+
+    // Ignore our own simulated keystrokes to prevent infinite loop
+    if kb.dwExtraInfo == lang_switch::LANGSWITCH_MAGIC {
+        return CallNextHookEx(None, code, wparam, lparam);
+    }
+
     let vk = kb.vkCode;
     let msg = wparam.0 as u32;
     let is_down = msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN;
@@ -100,6 +109,7 @@ unsafe extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -
                 CTRL_WAS_DOWN.store(true, Ordering::Relaxed);
             } else {
                 COMBO_DIRTY.store(true, Ordering::Relaxed);
+                PENDING_ID.fetch_add(1, Ordering::SeqCst);
             }
         }
 
@@ -118,10 +128,20 @@ unsafe extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -
             };
 
             if fire {
-                // Spawn switch on a separate thread so the hook returns instantly
-                std::thread::spawn(|| {
-                    lang_switch::switch_to_next_layout();
-                });
+                let delay = SWITCH_DELAY_MS.load(Ordering::SeqCst);
+                if delay == 0 {
+                    std::thread::spawn(|| {
+                        lang_switch::switch_to_next_layout();
+                    });
+                } else {
+                    let id = PENDING_ID.fetch_add(1, Ordering::SeqCst) + 1;
+                    std::thread::spawn(move || {
+                        std::thread::sleep(Duration::from_millis(delay));
+                        if PENDING_ID.load(Ordering::SeqCst) == id {
+                            lang_switch::switch_to_next_layout();
+                        }
+                    });
+                }
             }
         }
 
@@ -173,8 +193,17 @@ unsafe extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -
     CallNextHookEx(None, code, wparam, lparam)
 }
 
-pub fn start_hook(hotkey: &str) {
+pub fn set_delay(ms: u64) {
+    SWITCH_DELAY_MS.store(ms, Ordering::SeqCst);
+}
+
+pub fn update_delay(ms: u64) {
+    set_delay(ms);
+}
+
+pub fn start_hook(hotkey: &str, delay_ms: u64) {
     set_hotkey(hotkey);
+    set_delay(delay_ms);
 
     std::thread::spawn(|| unsafe {
         let _hook = SetWindowsHookExW(WH_KEYBOARD_LL, Some(hook_proc), None, 0)

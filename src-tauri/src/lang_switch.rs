@@ -4,7 +4,9 @@ use windows::Win32::Globalization::{
     GetLocaleInfoW, LOCALE_SENGLISHLANGUAGENAME, LOCALE_SLOCALIZEDLANGUAGENAME,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    ActivateKeyboardLayout, GetKeyboardLayout, GetKeyboardLayoutList, HKL, KLF_SETFORPROCESS,
+    ActivateKeyboardLayout, GetKeyboardLayout, GetKeyboardLayoutList, HKL,
+    KLF_SETFORPROCESS, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT,
+    KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP, VK_LMENU, VK_LSHIFT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     GetForegroundWindow, GetWindowThreadProcessId, PostMessageW, WM_INPUTLANGCHANGEREQUEST,
@@ -96,13 +98,48 @@ pub fn switch_to_next_layout() {
     switch_to_layout(layouts[next_idx].hkl);
 }
 
+/// Switches to next layout by simulating Alt+Shift keystroke via SendInput.
+/// This is the most reliable method — same as a physical keypress.
+pub fn switch_via_sendinput() {
+    unsafe {
+        let inputs = [
+            make_key_input(VK_LMENU.0, false),
+            make_key_input(VK_LSHIFT.0, false),
+            make_key_input(VK_LSHIFT.0, true),
+            make_key_input(VK_LMENU.0, true),
+        ];
+        SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
+    }
+}
+
+/// Magic marker to identify our own simulated keystrokes
+pub const LANGSWITCH_MAGIC: usize = 0x4C53_5749; // "LSWI"
+
+fn make_key_input(vk: u16, key_up: bool) -> INPUT {
+    let mut flags = KEYBD_EVENT_FLAGS(0);
+    if key_up {
+        flags = KEYEVENTF_KEYUP;
+    }
+    INPUT {
+        r#type: INPUT_KEYBOARD,
+        Anonymous: INPUT_0 {
+            ki: KEYBDINPUT {
+                wVk: windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY(vk),
+                wScan: 0,
+                dwFlags: flags,
+                time: 0,
+                dwExtraInfo: LANGSWITCH_MAGIC,
+            },
+        },
+    }
+}
+
 /// Switches to a specific layout by HKL value.
 pub fn switch_to_layout(hkl_value: isize) {
     unsafe {
         let hwnd = GetForegroundWindow();
         let hkl = HKL(hkl_value as *mut core::ffi::c_void);
 
-        // Primary method: post message to foreground window
         let _ = PostMessageW(
             hwnd,
             WM_INPUTLANGCHANGEREQUEST,
@@ -110,7 +147,6 @@ pub fn switch_to_layout(hkl_value: isize) {
             LPARAM(hkl_value),
         );
 
-        // Fallback: ActivateKeyboardLayout for current process
         let _ = ActivateKeyboardLayout(hkl, KLF_SETFORPROCESS);
     }
 }

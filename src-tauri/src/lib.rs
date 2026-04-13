@@ -23,7 +23,11 @@ pub struct AppSettings {
     pub show_notification: bool,
     pub polling_interval_ms: u64,
     pub minimize_to_tray: bool,
+    #[serde(default = "default_switch_delay")]
+    pub switch_delay_ms: u64,
 }
+
+fn default_switch_delay() -> u64 { 50 }
 
 impl Default for AppSettings {
     fn default() -> Self {
@@ -34,6 +38,7 @@ impl Default for AppSettings {
             show_notification: true,
             polling_interval_ms: 300,
             minimize_to_tray: true,
+            switch_delay_ms: 50,
         }
     }
 }
@@ -95,6 +100,9 @@ fn save_settings(app: AppHandle, settings: AppSettings) -> Result<(), String> {
     let old = load_settings(&app);
     if old.hotkey != settings.hotkey {
         keyboard_hook::update_hotkey(&settings.hotkey);
+    }
+    if old.switch_delay_ms != settings.switch_delay_ms {
+        keyboard_hook::update_delay(settings.switch_delay_ms);
     }
     save_settings_to_file(&app, &settings)
 }
@@ -284,7 +292,7 @@ pub fn run() {
             let settings = load_settings(&handle);
 
             // Start low-level keyboard hook for global hotkey
-            keyboard_hook::start_hook(&settings.hotkey);
+            keyboard_hook::start_hook(&settings.hotkey, settings.switch_delay_ms);
 
             // Start layout polling
             start_layout_polling(handle, settings.polling_interval_ms);

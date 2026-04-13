@@ -473,6 +473,15 @@ function SettingsPanel() {
           startPolling(val);
         }}
       />
+      <SettingRow
+        icon={<Keyboard class="w-4 h-4" />}
+        title="Switch delay"
+        description="Delay before switching (ms). Prevents conflicts with Shift+Alt+C etc."
+        type="select"
+        value={settings().switch_delay_ms}
+        options={[0, 15, 30, 50, 75, 100, 150]}
+        onChange={(v) => updateSetting('switch_delay_ms', Number(v))}
+      />
     </div>
   );
 }
@@ -487,13 +496,13 @@ function SettingRow(props: {
   onChange: (value: boolean | number) => void;
 }) {
   return (
-    <div class="flex items-center gap-3 p-3 rounded-xl bg-card border border-border">
-      <div class="flex items-center justify-center w-9 h-9 rounded-lg bg-secondary text-primary">
+    <div class="flex items-center gap-2.5 px-3 py-2 rounded-lg bg-card border border-border">
+      <div class="flex items-center justify-center w-7 h-7 rounded-md bg-secondary text-primary shrink-0">
         {props.icon}
       </div>
       <div class="flex-1 min-w-0">
-        <p class="text-sm font-medium">{props.title}</p>
-        <p class="text-xs text-muted-foreground">{props.description}</p>
+        <p class="text-[13px] font-medium leading-tight">{props.title}</p>
+        <p class="text-[11px] text-muted-foreground leading-tight">{props.description}</p>
       </div>
       <Show when={props.type === 'toggle'}>
         <button
