@@ -10,6 +10,7 @@ use std::time::Duration;
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, WindowEvent};
+use tauri_plugin_autostart::ManagerExt;
 
 static SETTINGS_PATH: OnceCell<PathBuf> = OnceCell::new();
 
@@ -25,6 +26,11 @@ pub struct AppSettings {
     pub minimize_to_tray: bool,
     #[serde(default = "default_switch_delay")]
     pub switch_delay_ms: u64,
+    /// When false, switching is instant — no timer, no cancel window.
+    /// Defaults to false so existing installs get the snappy behaviour back
+    /// after upgrading (stored settings without this field deserialize to false).
+    #[serde(default)]
+    pub switch_delay_enabled: bool,
 }
 
 fn default_switch_delay() -> u64 { 50 }
@@ -39,6 +45,7 @@ impl Default for AppSettings {
             polling_interval_ms: 300,
             minimize_to_tray: true,
             switch_delay_ms: 50,
+            switch_delay_enabled: false,
         }
     }
 }
@@ -96,15 +103,32 @@ fn get_settings(app: AppHandle) -> Result<AppSettings, String> {
 
 #[tauri::command]
 fn save_settings(app: AppHandle, settings: AppSettings) -> Result<(), String> {
-    // If hotkey changed, update the hook
     let old = load_settings(&app);
+
     if old.hotkey != settings.hotkey {
         keyboard_hook::update_hotkey(&settings.hotkey);
     }
     if old.switch_delay_ms != settings.switch_delay_ms {
         keyboard_hook::update_delay(settings.switch_delay_ms);
     }
+    if old.switch_delay_enabled != settings.switch_delay_enabled {
+        keyboard_hook::set_delay_enabled(settings.switch_delay_enabled);
+    }
+    if old.auto_start != settings.auto_start {
+        sync_autostart(&app, settings.auto_start);
+    }
+
     save_settings_to_file(&app, &settings)
+}
+
+/// Best-effort sync of the OS autostart entry to match the given flag.
+/// Errors are logged but don't fail the whole save — the setting is still persisted.
+fn sync_autostart(app: &AppHandle, enable: bool) {
+    let manager = app.autolaunch();
+    let result = if enable { manager.enable() } else { manager.disable() };
+    if let Err(e) = result {
+        log::warn!("autostart {}: {}", if enable { "enable" } else { "disable" }, e);
+    }
 }
 
 // ─── Windows Registry — Disable/Enable built-in hotkeys ─────────────────────
@@ -291,8 +315,15 @@ pub fn run() {
             // Load settings
             let settings = load_settings(&handle);
 
+            // Sync OS autostart entry with current setting (idempotent)
+            sync_autostart(&handle, settings.auto_start);
+
             // Start low-level keyboard hook for global hotkey
-            keyboard_hook::start_hook(&settings.hotkey, settings.switch_delay_ms);
+            keyboard_hook::start_hook(
+                &settings.hotkey,
+                settings.switch_delay_ms,
+                settings.switch_delay_enabled,
+            );
 
             // Start layout polling
             start_layout_polling(handle, settings.polling_interval_ms);

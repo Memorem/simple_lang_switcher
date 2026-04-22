@@ -16,6 +16,7 @@ export interface Settings {
   polling_interval_ms: number;
   minimize_to_tray: boolean;
   switch_delay_ms: number;
+  switch_delay_enabled: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -26,6 +27,7 @@ export const DEFAULT_SETTINGS: Settings = {
   polling_interval_ms: 300,
   minimize_to_tray: true,
   switch_delay_ms: 50,
+  switch_delay_enabled: false,
 };
 
 const [settings, setSettingsSignal] = createSignal<Settings>(DEFAULT_SETTINGS);

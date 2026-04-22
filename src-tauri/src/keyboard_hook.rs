@@ -1,4 +1,6 @@
+use once_cell::sync::OnceCell;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::mpsc::{self, Sender};
 use std::time::Duration;
 use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
@@ -21,8 +23,48 @@ static ALT_WAS_DOWN: AtomicBool = AtomicBool::new(false);
 static SHIFT_WAS_DOWN: AtomicBool = AtomicBool::new(false);
 static CTRL_WAS_DOWN: AtomicBool = AtomicBool::new(false);
 static COMBO_DIRTY: AtomicBool = AtomicBool::new(false);
+
+static SWITCH_DELAY_ENABLED: AtomicBool = AtomicBool::new(false);
 static SWITCH_DELAY_MS: AtomicU64 = AtomicU64::new(50);
 static PENDING_ID: AtomicU64 = AtomicU64::new(0);
+
+/// Messages sent from the hook (running on input thread) to the worker.
+/// Keeps the hook lean — it MUST NEVER block input.
+enum SwitchCmd {
+    Now,
+    AfterDelay { delay_ms: u64, id: u64 },
+}
+
+static WORKER_TX: OnceCell<Sender<SwitchCmd>> = OnceCell::new();
+
+fn start_worker() {
+    let (tx, rx) = mpsc::channel::<SwitchCmd>();
+    std::thread::spawn(move || {
+        while let Ok(cmd) = rx.recv() {
+            match cmd {
+                SwitchCmd::Now => {
+                    lang_switch::switch_to_next_layout();
+                }
+                SwitchCmd::AfterDelay { delay_ms, id } => {
+                    // Ephemeral helper so the worker stays responsive
+                    std::thread::spawn(move || {
+                        std::thread::sleep(Duration::from_millis(delay_ms));
+                        if PENDING_ID.load(Ordering::SeqCst) == id {
+                            lang_switch::switch_to_next_layout();
+                        }
+                    });
+                }
+            }
+        }
+    });
+    let _ = WORKER_TX.set(tx);
+}
+
+fn dispatch(cmd: SwitchCmd) {
+    if let Some(tx) = WORKER_TX.get() {
+        let _ = tx.send(cmd);
+    }
+}
 
 pub fn set_hotkey(hotkey: &str) {
     let parts: Vec<&str> = hotkey.split('+').map(|s| s.trim()).collect();
@@ -69,6 +111,22 @@ fn is_modifier(vk: u32) -> bool {
     is_alt(vk) || is_shift(vk) || is_ctrl(vk)
 }
 
+/// Decide whether to fire now, after a delay, or never.
+/// Called at the exact moment a valid combo release is detected.
+fn fire_switch() {
+    if SWITCH_DELAY_ENABLED.load(Ordering::Relaxed) {
+        let delay = SWITCH_DELAY_MS.load(Ordering::SeqCst);
+        if delay == 0 {
+            dispatch(SwitchCmd::Now);
+        } else {
+            let id = PENDING_ID.fetch_add(1, Ordering::SeqCst) + 1;
+            dispatch(SwitchCmd::AfterDelay { delay_ms: delay, id });
+        }
+    } else {
+        dispatch(SwitchCmd::Now);
+    }
+}
+
 /// SAFETY: This hook NEVER consumes keys. It ALWAYS calls CallNextHookEx.
 /// It only observes key events and triggers language switch as a side effect.
 unsafe extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
@@ -95,7 +153,7 @@ unsafe extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -
     let want_vk = HOTKEY_VK.load(Ordering::Relaxed);
 
     if want_vk == 0 {
-        // Modifier-only combo (e.g. Alt+Shift):
+        // Modifier-only combo (e.g. Alt+Shift).
         // Track which modifiers are pressed. If a non-modifier key is pressed
         // in between, mark combo as dirty. On release of one modifier while
         // the other is still held (and combo is clean), fire the switch.
@@ -109,6 +167,7 @@ unsafe extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -
                 CTRL_WAS_DOWN.store(true, Ordering::Relaxed);
             } else {
                 COMBO_DIRTY.store(true, Ordering::Relaxed);
+                // Invalidate any pending delayed switch
                 PENDING_ID.fetch_add(1, Ordering::SeqCst);
             }
         }
@@ -128,20 +187,7 @@ unsafe extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -
             };
 
             if fire {
-                let delay = SWITCH_DELAY_MS.load(Ordering::SeqCst);
-                if delay == 0 {
-                    std::thread::spawn(|| {
-                        lang_switch::switch_to_next_layout();
-                    });
-                } else {
-                    let id = PENDING_ID.fetch_add(1, Ordering::SeqCst) + 1;
-                    std::thread::spawn(move || {
-                        std::thread::sleep(Duration::from_millis(delay));
-                        if PENDING_ID.load(Ordering::SeqCst) == id {
-                            lang_switch::switch_to_next_layout();
-                        }
-                    });
-                }
+                fire_switch();
             }
         }
 
@@ -171,9 +217,7 @@ unsafe extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -
         let shift_ok = !want_shift || SHIFT_WAS_DOWN.load(Ordering::Relaxed);
 
         if alt_ok && ctrl_ok && shift_ok {
-            std::thread::spawn(|| {
-                lang_switch::switch_to_next_layout();
-            });
+            dispatch(SwitchCmd::Now);
         }
 
         // Track modifiers for key+modifier combos too
@@ -201,9 +245,15 @@ pub fn update_delay(ms: u64) {
     set_delay(ms);
 }
 
-pub fn start_hook(hotkey: &str, delay_ms: u64) {
+pub fn set_delay_enabled(enabled: bool) {
+    SWITCH_DELAY_ENABLED.store(enabled, Ordering::Relaxed);
+}
+
+pub fn start_hook(hotkey: &str, delay_ms: u64, delay_enabled: bool) {
     set_hotkey(hotkey);
     set_delay(delay_ms);
+    set_delay_enabled(delay_enabled);
+    start_worker();
 
     std::thread::spawn(|| unsafe {
         let _hook = SetWindowsHookExW(WH_KEYBOARD_LL, Some(hook_proc), None, 0)

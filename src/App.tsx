@@ -224,7 +224,7 @@ export default function App() {
       {/* Status bar */}
       <div class="flex items-center justify-between px-4 h-8 shrink-0 border-t border-border/50 text-[11px] text-muted-foreground">
         <span>{layouts().length} languages installed</span>
-        <span>v0.1.0</span>
+        <span>v0.1.2</span>
       </div>
     </div>
   );
@@ -476,12 +476,22 @@ function SettingsPanel() {
       <SettingRow
         icon={<Keyboard class="w-4 h-4" />}
         title="Switch delay"
-        description="Delay before switching (ms). Prevents conflicts with Shift+Alt+C etc."
-        type="select"
-        value={settings().switch_delay_ms}
-        options={[0, 15, 30, 50, 75, 100, 150]}
-        onChange={(v) => updateSetting('switch_delay_ms', Number(v))}
+        description="Wait before switching to avoid Shift+Alt+C type conflicts"
+        type="toggle"
+        value={settings().switch_delay_enabled}
+        onChange={(v) => updateSetting('switch_delay_enabled', v as boolean)}
       />
+      <Show when={settings().switch_delay_enabled}>
+        <SettingRow
+          icon={<Timer class="w-4 h-4" />}
+          title="Delay duration"
+          description="Cancel window after modifier release (ms)"
+          type="select"
+          value={settings().switch_delay_ms}
+          options={[15, 30, 50, 75, 100, 150]}
+          onChange={(v) => updateSetting('switch_delay_ms', Number(v))}
+        />
+      </Show>
     </div>
   );
 }
