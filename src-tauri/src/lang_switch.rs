@@ -3,7 +3,6 @@ use windows::Win32::Foundation::{LPARAM, WPARAM};
 use windows::Win32::Globalization::{
     GetLocaleInfoW, LOCALE_SENGLISHLANGUAGENAME, LOCALE_SLOCALIZEDLANGUAGENAME,
 };
-use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     ActivateKeyboardLayout, GetKeyboardLayout, GetKeyboardLayoutList, HKL,
     INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP,
@@ -140,13 +139,17 @@ fn make_key_input(vk: u16, key_up: bool) -> INPUT {
 
 /// Switches to a specific layout by HKL value.
 ///
-/// Multi-strategy approach for maximum compatibility:
-/// 1. `AttachThreadInput` + `ActivateKeyboardLayout` — merges input queues so the
-///    layout change applies to the foreground thread. Works in file-pickers, modal
-///    dialogs and other stubborn windows where `WM_INPUTLANGCHANGEREQUEST` is ignored.
-/// 2. `PostMessageW` to the foreground window — for well-behaved apps that listen.
-/// 3. `PostMessageW` to the actually-focused child window (dialogs often route
-///    language messages only to focused child).
+/// Safe two-step approach — never touches another thread's input queue:
+/// 1. `ActivateKeyboardLayout` in our process — keeps layout enumeration in sync.
+/// 2. `PostMessageW(WM_INPUTLANGCHANGEREQUEST)` to the foreground window AND to
+///    the actually-focused child reported by `GetGUIThreadInfo` (modal dialogs
+///    often only forward the message to the focused child).
+///
+/// We deliberately do NOT use `AttachThreadInput`. Even though it makes layout
+/// changes stick in stubborn windows like Win+R / file pickers, it merges keyboard
+/// input state between threads. In practice this corrupts the shell's modifier
+/// tracking — Shift gets stuck "pressed" globally, which breaks Alt+Tab direction,
+/// taskbar click-to-activate (Shift+click = open new instance) and Win key.
 pub fn switch_to_layout(hkl_value: isize) {
     unsafe {
         let hwnd = GetForegroundWindow();
@@ -155,23 +158,11 @@ pub fn switch_to_layout(hkl_value: isize) {
         }
 
         let hkl = HKL(hkl_value as *mut core::ffi::c_void);
-        let target_thread = GetWindowThreadProcessId(hwnd, None);
-        let our_thread = GetCurrentThreadId();
 
-        // Strategy 1: attach input queue and force-activate layout on target thread.
-        // This is the method that works inside common dialogs, file pickers, Win+R etc.
-        if target_thread != 0 && target_thread != our_thread {
-            let attached = AttachThreadInput(our_thread, target_thread, true).as_bool();
-            let _ = ActivateKeyboardLayout(hkl, KLF_SETFORPROCESS);
-            if attached {
-                let _ = AttachThreadInput(our_thread, target_thread, false);
-            }
-        } else {
-            // Same thread (rare) — direct activation is enough
-            let _ = ActivateKeyboardLayout(hkl, KLF_SETFORPROCESS);
-        }
+        // Keep our own process aware of the new layout
+        let _ = ActivateKeyboardLayout(hkl, KLF_SETFORPROCESS);
 
-        // Strategy 2: nudge the top-level window
+        // Ask the foreground window to switch
         let _ = PostMessageW(
             hwnd,
             WM_INPUTLANGCHANGEREQUEST,
@@ -179,14 +170,17 @@ pub fn switch_to_layout(hkl_value: isize) {
             LPARAM(hkl_value),
         );
 
-        // Strategy 3: post to the focused child inside the foreground thread
-        // (modal dialogs often only forward to this window).
-        let mut gti = GUITHREADINFO {
-            cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
-            ..Default::default()
-        };
-        if GetGUIThreadInfo(target_thread, &mut gti).is_ok() {
-            if !gti.hwndFocus.0.is_null() && gti.hwndFocus != hwnd {
+        // Modal dialogs often only react to messages addressed to the focused child
+        let target_thread = GetWindowThreadProcessId(hwnd, None);
+        if target_thread != 0 {
+            let mut gti = GUITHREADINFO {
+                cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
+                ..Default::default()
+            };
+            if GetGUIThreadInfo(target_thread, &mut gti).is_ok()
+                && !gti.hwndFocus.0.is_null()
+                && gti.hwndFocus != hwnd
+            {
                 let _ = PostMessageW(
                     gti.hwndFocus,
                     WM_INPUTLANGCHANGEREQUEST,
