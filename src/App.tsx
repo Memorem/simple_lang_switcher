@@ -224,7 +224,7 @@ export default function App() {
       {/* Status bar */}
       <div class="flex items-center justify-between px-4 h-8 shrink-0 border-t border-border/50 text-[11px] text-muted-foreground">
         <span>{layouts().length} languages installed</span>
-        <span>v0.1.3</span>
+        <span>v0.1.4</span>
       </div>
     </div>
   );

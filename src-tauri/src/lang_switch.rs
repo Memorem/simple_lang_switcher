@@ -77,10 +77,32 @@ pub fn get_installed_layouts() -> Vec<LayoutInfo> {
 /// Returns the current keyboard layout of the foreground window.
 pub fn get_current_layout() -> LayoutInfo {
     unsafe {
-        let hwnd = GetForegroundWindow();
-        let thread_id = GetWindowThreadProcessId(hwnd, None);
-        let hkl = GetKeyboardLayout(thread_id);
+        let hkl = GetKeyboardLayout(input_thread());
         hkl_to_layout_info(hkl)
+    }
+}
+
+/// The thread that receives the keyboard input now: the owner of the window
+/// with keyboard focus, which is not always the foreground window's thread.
+///
+/// A WebView2 / Chromium app (Apex HUB, Electron, Edge) puts the focused
+/// window in another process: the foreground window's thread keeps its old
+/// layout while the focused one switches. Reading the foreground thread there
+/// reports the layout the user is no longer typing in, so «next» picks the
+/// wrong one and the switch back never happens.
+fn input_thread() -> u32 {
+    unsafe {
+        let mut gti = GUITHREADINFO {
+            cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
+            ..Default::default()
+        };
+        if GetGUIThreadInfo(0, &mut gti).is_ok() && !gti.hwndFocus.0.is_null() {
+            let focused = GetWindowThreadProcessId(gti.hwndFocus, None);
+            if focused != 0 {
+                return focused;
+            }
+        }
+        GetWindowThreadProcessId(GetForegroundWindow(), None)
     }
 }
 
